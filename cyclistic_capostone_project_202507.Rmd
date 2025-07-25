@@ -4,48 +4,38 @@ output: html_document
 date: "2025-07-25"
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
 # Setup & install packages
 
 ```{r}
-install.packages(c("tidyverse", "lubridate", "janitor", "skimr", "ggplot2", "scales", "ggmap", "leaflet", "viridis", "sf"))
+install.packages(c("tidyverse", "lubridate", "janitor", "skimr", "ggplot2", "scales"))
+
 library(tidyverse)
 library(lubridate)
 library(janitor)    # Data cleaning
 library(skimr)      # Quick data inspection
 library(ggplot2)    # Visualizations
 library(scales)     # Better axis formatting
-library(ggmap)    # For mapping
-library(leaflet)  # For interactive maps
-library(viridis)  # Color scales
-library(tidygeocoder)
-library(htmlwidgets)
-library(sf)
 ```
 
 # Data import
 
 ```{r}
-
 library(readr)
 q1_2019 <- read_csv("Divvy_Trips_2019_Q1/Divvy_Trips_2019_Q1.csv")
 q1_2020 <- read_csv("Divvy_Trips_2020_Q1/Divvy_Trips_2020_Q1.csv")
 ```
 
-# Checking the columns and structure
+# Check columns and structure
 
 ```{r}
 colnames(q1_2019)
 colnames(q1_2020)
 ```
 
-# Organize columns in the two datasets to match each other and be able to combine them
+# Organize columns in the two datasets to match each other in order to be able to combine them
 
 ```{r}
-# Rename the columns in dataset Divvy_Trips_2019_Q1 to match the columns names in dataset Divvy_Trips_2020_Q1
+# Remove and rename columns in dataset Divvy_Trips_2019_Q1 to match the columns' names in dataset Divvy_Trips_2020_Q1
 clean_2019 <- q1_2019 %>%
   select(-trip_id, -bikeid, -gender, -birthyear, -tripduration) %>%
   rename(
@@ -96,7 +86,8 @@ trips_clean <- all_trips %>%
   distinct() %>%                # Remove duplicates
   clean_names() %>%             # Ensure consistent column naming
   mutate(
-    # Adjust day_of_week to start from Monday to Sunday, better for data viz
+    # Adjust day_of_week to start from Monday to Sunday, better for data viz 
+    # Note: The assignment requested to order the days as Sun - Sat, but to compare weekdays - weekends it is easier to view the resulrs from Mon - Sun
     day_of_week = factor(day_of_week,
                          levels = c("Monday", "Tuesday", "Wednesday", 
                                    "Thursday", "Friday", "Saturday", "Sunday"),
@@ -104,8 +95,9 @@ trips_clean <- all_trips %>%
   )
 ```
 
-# EXPLORATORY ANALYSIS
+# Exploratory analysis
 # Quick stats
+# Group data by usertype and day_of_week
 
 ```{r}
 trips_clean %>% 
@@ -113,9 +105,8 @@ trips_clean %>%
   group_by(member_casual) %>%
   skim(ride_length)
 
-# Summary table
 summary_stats <- trips_clean %>%
-  group_by(member_casual, day_of_week) %>% # Group data by usertype and day_of_week
+  group_by(member_casual, day_of_week) %>% 
   summarise(
     avg_duration = mean(ride_length),
     median_duration = median(ride_length),
@@ -140,12 +131,10 @@ trips_clean <- trips_clean %>%
                         ordered = TRUE))
 ```
 
-# VISUALIZATIONS
-## USERTYPE COMPOSITION
-# 1. Total usertypes (members/casuals)
+# Visualizations
+# 1. Usertype composition: Total usertypes (members/casuals)
 
 ```{r}
-
 member_counts <- trips_clean %>%
   count(member_casual) %>%
   mutate(percent = n/sum(n)*100)
@@ -162,12 +151,9 @@ ggplot(member_counts, aes(x = "", y = n, fill = member_casual)) +
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-## B. RIDE DURATION
-
-# 2. Average ride duration in minutes by usertype
+# 2. Ride duration: Average ride duration in minutes by usertype
 
 ```{r} 
-
 trips_clean %>%
   group_by(member_casual) %>%
   summarise(avg_duration = mean(ride_length)) %>%
@@ -185,7 +171,7 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-# 3. Total rides count by usertype
+# 3. Ride duration: Total rides count by usertype
 
 ```{r}
 trips_clean %>%
@@ -203,11 +189,9 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-### C. MONTHLY TRENDS
-# 4. Average ride duration by month by usertype
+# 4. Monthly trends: Average ride duration by month by usertype
 
 ```{r}
-
 trips_clean %>%
   group_by(month_year, member_casual) %>%
   summarise(avg_duration = mean(ride_length)) %>%
@@ -226,10 +210,9 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-# 5. Total ride count by month by usertype
+# 5. Monthly trends: Total ride count by month by usertype
 
 ```{r}
-
 trips_clean %>%
   count(month_year, member_casual) %>%
   ggplot(aes(x = month_year, y = n, fill = member_casual)) +
@@ -247,8 +230,7 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-### D. DAY OF WEEK TRENDS
-# 6. Average ride duration by day of week by usertype
+# 6. Day of week trends: Average ride duration by day of week by usertype
 
 ```{r} 
 trips_clean %>%
@@ -269,10 +251,9 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-# 7. Total rides count by day of week by usertype
+# 7. Day of week trends: Total rides count by day of week by usertype
 
 ```{r}
- 
 trips_clean %>%
   group_by(member_casual, day_of_week) %>%
   summarise(num_rides = n()) %>%
@@ -292,8 +273,7 @@ trips_clean %>%
 
 ```
 
-### E. WEEKDAY VS WEEKEND TRENDS
-# 8. Average ride duration by weekday - weekend by usertype
+# 8. Weekday vs weekends trends: Average ride duration by weekday - weekend by usertype
 
 ```{r} 
 trips_clean %>%
@@ -313,7 +293,7 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-# 9. Total rides count by weekday - weekend by usertype
+# 9. Weekday vs weekends trends: Total rides count by weekday - weekend by usertype
 
 ```{r} 
 trips_clean %>%
@@ -333,8 +313,7 @@ trips_clean %>%
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-### F. PEAK TIMES TRENDS
-# 10. Rides count by hour of day
+# 10. Peak times trends: Rides count by hour of day
 
 ```{r} 
 trips_clean %>%
@@ -353,3 +332,4 @@ trips_clean %>%
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5)) +
   scale_x_continuous(breaks = 0:23)
+```
