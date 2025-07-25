@@ -1,0 +1,355 @@
+---
+title: "cyclistic_capstone_project_202507"
+output: html_document
+date: "2025-07-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup & install packages
+
+```{r}
+install.packages(c("tidyverse", "lubridate", "janitor", "skimr", "ggplot2", "scales", "ggmap", "leaflet", "viridis", "sf"))
+library(tidyverse)
+library(lubridate)
+library(janitor)    # Data cleaning
+library(skimr)      # Quick data inspection
+library(ggplot2)    # Visualizations
+library(scales)     # Better axis formatting
+library(ggmap)    # For mapping
+library(leaflet)  # For interactive maps
+library(viridis)  # Color scales
+library(tidygeocoder)
+library(htmlwidgets)
+library(sf)
+```
+
+# Data import
+
+```{r}
+
+library(readr)
+q1_2019 <- read_csv("Divvy_Trips_2019_Q1/Divvy_Trips_2019_Q1.csv")
+q1_2020 <- read_csv("Divvy_Trips_2020_Q1/Divvy_Trips_2020_Q1.csv")
+```
+
+# Checking the columns and structure
+
+```{r}
+colnames(q1_2019)
+colnames(q1_2020)
+```
+
+# Organize columns in the two datasets to match each other and be able to combine them
+
+```{r}
+# Rename the columns in dataset Divvy_Trips_2019_Q1 to match the columns names in dataset Divvy_Trips_2020_Q1
+clean_2019 <- q1_2019 %>%
+  select(-trip_id, -bikeid, -gender, -birthyear, -tripduration) %>%
+  rename(
+    started_at = start_time,
+    ended_at = end_time,
+    start_station_id = from_station_id,
+    start_station_name = from_station_name,
+    end_station_id = to_station_id,
+    end_station_name = to_station_name,
+    member_casual = usertype
+  ) %>%
+  mutate(member_casual = recode(member_casual, 
+                               "Subscriber" = "member",
+                               "Customer" = "casual"))
+
+# Remove columns in dataset Divvy_Trips_2020_Q1
+clean_2020 <- q1_2020 %>%
+  select(-ride_id, -rideable_type, -start_lat, -start_lng, -end_lat, -end_lng)
+
+```
+
+# Combine the two DataFrames 
+# Create columns named: 'ride_length', 'date', 'day_of_week', 'month', 'year'
+
+```{r}
+all_trips <- bind_rows(clean_2019, clean_2020) %>%
+  mutate(
+    started_at = ymd_hms(started_at),
+    ended_at = ymd_hms(ended_at),
+    ride_length = as.numeric(difftime(ended_at, started_at, units = "mins")),
+    date = as.Date(started_at),
+    day_of_week = wday(started_at, label = TRUE, abbr = FALSE),
+    month = month(started_at, label = TRUE),
+    year = year(started_at)
+  )
+```
+
+# Data cleaning
+ 
+```{r} 
+trips_clean <- all_trips %>%
+  filter(
+    ride_length > 0,           # Remove negative ride durations
+    ride_length < 1440,         # Remove ride durations longer than 24h
+    !is.na(start_station_name), # Remove missing station names
+    !is.na(member_casual)     # Remove missing usertype
+  ) %>%
+  distinct() %>%                # Remove duplicates
+  clean_names() %>%             # Ensure consistent column naming
+  mutate(
+    # Adjust day_of_week to start from Monday to Sunday, better for data viz
+    day_of_week = factor(day_of_week,
+                         levels = c("Monday", "Tuesday", "Wednesday", 
+                                   "Thursday", "Friday", "Saturday", "Sunday"),
+                         ordered = TRUE)
+  )
+```
+
+# EXPLORATORY ANALYSIS
+# Quick stats
+
+```{r}
+trips_clean %>% 
+  # Separate ride_length data by usertype
+  group_by(member_casual) %>%
+  skim(ride_length)
+
+# Summary table
+summary_stats <- trips_clean %>%
+  group_by(member_casual, day_of_week) %>% # Group data by usertype and day_of_week
+  summarise(
+    avg_duration = mean(ride_length),
+    median_duration = median(ride_length),
+    total_rides = n(),
+    .groups = "drop" 
+    ) %>%
+  arrange(member_casual, day_of_week)
+```
+
+# Create columns for easier data viz filtering
+
+```{r}
+trips_clean <- trips_clean %>%
+  mutate(month_year = format(date, "%b %Y"),
+         is_weekend = if_else(day_of_week %in% c("Saturday", "Sunday"), 
+                              "Weekend", "Weekday"), # Discover weekday - weekend trends
+         hour_of_day = hour(started_at), # Discover hour trends/peak hours
+         # month_year order as datasets used only have data for Jan-Mar in 2019 and 2020
+         month_year = factor(month_year,
+                        levels = c("Jan 2019", "Feb 2019", "Mar 2019", 
+                                   "Jan 2020", "Feb 2020", "Mar 2020"),
+                        ordered = TRUE))
+```
+
+# VISUALIZATIONS
+## USERTYPE COMPOSITION
+# 1. Total usertypes (members/casuals)
+
+```{r}
+
+member_counts <- trips_clean %>%
+  count(member_casual) %>%
+  mutate(percent = n/sum(n)*100)
+
+ggplot(member_counts, aes(x = "", y = n, fill = member_casual)) +
+  geom_col(width = 1, color = "white") +
+  geom_text(aes(label = paste0(round(percent), "%\n(", comma(n), ")")),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar("y") +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Usertype Composition",
+       fill = "Usertype") +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## B. RIDE DURATION
+
+# 2. Average ride duration in minutes by usertype
+
+```{r} 
+
+trips_clean %>%
+  group_by(member_casual) %>%
+  summarise(avg_duration = mean(ride_length)) %>%
+  ggplot(aes(x = member_casual, y = avg_duration, fill = member_casual)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(avg_duration, 1), " min")), 
+            vjust = -0.5) +
+  scale_y_continuous(labels = number_format(suffix = " min")) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Average Ride Duration",
+       fill = "Usertype",
+       x = "",
+       y = "Ride duration (minutes)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# 3. Total rides count by usertype
+
+```{r}
+trips_clean %>%
+  count(member_casual) %>%
+  ggplot(aes(x = member_casual, y = n, fill = member_casual)) +
+  geom_col() +
+  geom_text(aes(label = comma(n)), vjust = -0.5) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Total Rides Count",
+       fill = "Usertype",
+       x = "",
+       y = "Number of rides") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### C. MONTHLY TRENDS
+# 4. Average ride duration by month by usertype
+
+```{r}
+
+trips_clean %>%
+  group_by(month_year, member_casual) %>%
+  summarise(avg_duration = mean(ride_length)) %>%
+  ggplot(aes(x = month_year, y = avg_duration, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(avg_duration, 1)), 
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = number_format(suffix = " min")) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Average Ride Duration: Monthly",
+       fill = "Usertype",
+       x = "",
+       y = "Ride duration (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# 5. Total ride count by month by usertype
+
+```{r}
+
+trips_clean %>%
+  count(month_year, member_casual) %>%
+  ggplot(aes(x = month_year, y = n, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = comma(n)), 
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Total Rides Count: Monthly",
+       fill = "Usertype",
+       x = "",
+       y = "Number of rides") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### D. DAY OF WEEK TRENDS
+# 6. Average ride duration by day of week by usertype
+
+```{r} 
+trips_clean %>%
+  group_by(member_casual, day_of_week) %>%
+  summarise(avg_duration = mean(ride_length)) %>%
+  ggplot(aes(x = day_of_week, y = avg_duration, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(avg_duration, 1)), 
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = number_format(suffix = " min")) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Average Ride Duration: Day of Week",
+       fill = "Usertype",
+       x = "",
+       y = "Ride duration (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# 7. Total rides count by day of week by usertype
+
+```{r}
+ 
+trips_clean %>%
+  group_by(member_casual, day_of_week) %>%
+  summarise(num_rides = n()) %>%
+  ggplot(aes(x = day_of_week, y = num_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = comma(num_rides)), 
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Rides Count: Day of Week",
+       fill = "Usertype",
+       x = "",
+       y = "Number of rides") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+### E. WEEKDAY VS WEEKEND TRENDS
+# 8. Average ride duration by weekday - weekend by usertype
+
+```{r} 
+trips_clean %>%
+  group_by(member_casual, is_weekend) %>%
+  summarise(avg_duration = mean(ride_length)) %>%
+  ggplot(aes(x = is_weekend, y = avg_duration, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(avg_duration, 1)), 
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = number_format(suffix = " min")) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Average Ride Duration: Weekday - Weekend",
+       fill = "Usertype",
+       x = "",
+       y = "Ride duration (minutes)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+# 9. Total rides count by weekday - weekend by usertype
+
+```{r} 
+trips_clean %>%
+  group_by(member_casual, is_weekend) %>%
+  summarise(num_rides = n()) %>%
+  ggplot(aes(x = is_weekend, y = num_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = comma(num_rides)), 
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Total Rides Count: Weekday - Weekend",
+       fill = "Usertype",
+       x = "",
+       y = "Number of rides") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### F. PEAK TIMES TRENDS
+# 10. Rides count by hour of day
+
+```{r} 
+trips_clean %>%
+  group_by(member_casual, hour_of_day) %>%
+  summarise(num_rides = n()) %>%
+  ggplot(aes(x = hour_of_day, y = num_rides, color = member_casual)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = comma) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Hourly Trends",
+       fill = "Usertype",
+       x = "Hour of Day",
+       y = "Number of Rides",
+       color = "Usertype") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(breaks = 0:23)
